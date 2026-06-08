@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables."""
 
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +20,6 @@ class Settings(BaseSettings):
 
     vllm_url: str = "http://localhost:8001/v1"
     vllm_model: str = "Qwen/Qwen3.5-4B"
-    telegram_bot_token: str = ""
     git_user_name: str = "Agent Loop"
     git_user_email: str = "agent@localhost"
     workspace_dir: str = "/tmp/agent-loop"  # noqa: S108

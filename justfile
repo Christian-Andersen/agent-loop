@@ -21,7 +21,7 @@ run *args:
     uv run -- agent-loop {{ args }}
 
 test *args:
-    uv run -- pytest {{ args }}
+    uv run python -m pytest {{ args }}
 
 audit:
     uv audit

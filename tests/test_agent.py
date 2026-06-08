@@ -28,13 +28,15 @@ class TestCreateAgent:
             "create_branch",
             "commit_changes",
             "show_status",
+            "read_todo_file",
+            "mark_todo_done",
         }
         assert names == expected
 
     def test_accepts_modes(self) -> None:
         """Should create agents for all modes."""
         settings = Settings()
-        for mode in ("dev", "fix", "classify", "scan"):
+        for mode in ("orchestrate", "loop"):
             agent = create_agent(settings, mode=mode)
             assert agent is not None
             assert "call_opencode" in agent._function_toolset.tools

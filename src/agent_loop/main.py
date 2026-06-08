@@ -14,7 +14,8 @@ from loguru import logger
 
 from .agent import create_agent
 from .config import AgentDeps, load_settings
-from .git_ops import checkout_branch
+from .git_ops import commit_all
+from .todo import mark_done, parse_tasks, read_todo, write_todo
 
 if TYPE_CHECKING:
     from .settings import Settings
@@ -36,61 +37,53 @@ def _check_vllm(settings: Settings) -> None:
         sys.exit(1)
 
 
-def cmd_chat(settings: Settings) -> None:
-    """Start the Telegram bot (interactive mode)."""
-    _check_vllm(settings)
-    bot = build_bot(settings)
-    logger.info("Starting Telegram bot polling...")
-    bot.run_polling()
+def cmd_loop(settings: Settings, todo_path: str) -> None:
+    """Sequentially run opencode for each incomplete task in TODO.md."""
+    content = read_todo(todo_path)
+    tasks = parse_tasks(content)
+    total = sum(1 for t in tasks if not t.done)
+
+    if total == 0:
+        logger.info("No pending tasks in {}", todo_path)
+        return
+
+    done = 0
+    for i, task in enumerate(tasks):
+        if task.done:
+            continue
+        done += 1
+        logger.info("[{done}/{total}] {text}", done=done, total=total, text=task.text)
+
+        result = subprocess.run(  # noqa: S603
+            [settings.opencode_binary, task.text],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        sys.stdout.write(result.stdout)
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+
+        if result.returncode != 0:
+            logger.error("opencode exited with status {}", result.returncode)
+            continue
+
+        content = mark_done(content, i)
+        write_todo(todo_path, content)
+        commit_all(".", f"[agent-loop] {task.text}")
+        logger.info("Task marked done and committed")
+
+    logger.info("Processed {done}/{total} tasks", done=done, total=total)
 
 
-async def cmd_fix(settings: Settings, prompt: str, repo_dir: str, branch: str) -> None:
-    """Run a one-shot fix in the given repo directory."""
-    _check_vllm(settings)
-
-    repo_name = Path(repo_dir).name
-    deps = AgentDeps(settings=settings, current_project=repo_name)
-
-    # Checkout branch
-    branch_msg = checkout_branch(repo_dir, branch)
-    logger.info("{}", branch_msg)
-
-    agent = create_agent(settings, "fix")
-    result = await agent.run(prompt, deps=deps)
-    output = str(result.output)
-
-    if "[UNANSWERED]" in output:
-        logger.error("Question: {}", output)
-        sys.exit(1)
-
-    sha = subprocess.run(  # noqa: ASYNC221
-        ["git", "rev-parse", "HEAD"],  # noqa: S607
-        cwd=repo_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-
-    print(f"SUCCESS\nCommit: {sha}\nBranch: {branch}\nOutput: {output[:500]}")  # noqa: T201
-
-
-async def cmd_classify(settings: Settings, text: str) -> None:
-    """Classify an issue description."""
-    _check_vllm(settings)
-    deps = AgentDeps(settings=settings)
-    agent = create_agent(settings, "classify")
-    result = await agent.run(text, deps=deps)
-    print(result.output)  # noqa: T201
-
-
-async def cmd_scan(settings: Settings, path: str) -> None:
-    """Scan a repository for issues."""
-    _check_vllm(settings)
-    repo_name = Path(path).name
-    deps = AgentDeps(settings=settings, current_project=repo_name)
-    agent = create_agent(settings, "scan")
+async def cmd_orchestrate(settings: Settings, todo_path: str) -> None:
+    """Use an LLM orchestrator to drive work through TODO.md tasks."""
+    deps = AgentDeps(settings=settings, current_project=Path.cwd().name, todo_path=todo_path)
+    content = read_todo(todo_path)
+    agent = create_agent(settings, "orchestrate")
     result = await agent.run(
-        f"Scan the repository at {path} for issues. Output each finding as a JSON line.",
+        f"Here is the TODO list:\n\n{content}\n\nWork through the incomplete tasks one at a time.",
         deps=deps,
     )
     print(result.output)  # noqa: T201
@@ -101,31 +94,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="agent-loop: local autonomous coding agent")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("chat", help="Start Telegram bot")
+    loop_parser = sub.add_parser("loop", help="Sequential for-loop over TODO.md tasks")
+    loop_parser.add_argument("--todo", default="TODO.md", help="Path to TODO.md (default: TODO.md)")
 
-    fix_parser = sub.add_parser("fix", help="Run a one-shot fix in a repo")
-    fix_parser.add_argument("prompt", help="Description of the fix")
-    fix_parser.add_argument("--repo-dir", required=True, help="Path to the cloned repo")
-    fix_parser.add_argument("--branch", default="fix/auto", help="Branch to create")
-
-    classify_parser = sub.add_parser("classify", help="Classify an issue")
-    classify_parser.add_argument("text", help="Issue title or body")
-
-    scan_parser = sub.add_parser("scan", help="Scan a repo for issues")
-    scan_parser.add_argument("path", help="Path to the repository")
+    orch_parser = sub.add_parser("orchestrate", help="LLM-driven orchestrator over TODO.md tasks")
+    orch_parser.add_argument("--todo", default="TODO.md", help="Path to TODO.md (default: TODO.md)")
 
     args = parser.parse_args()
     settings = load_settings()
 
-    if args.command == "chat":
-        cmd_chat(settings)
-    elif args.command == "fix":
-        asyncio.run(cmd_fix(settings, args.prompt, args.repo_dir, args.branch))
-    elif args.command == "classify":
-        asyncio.run(cmd_classify(settings, args.text))
-    elif args.command == "scan":
-        asyncio.run(cmd_scan(settings, args.path))
-
-
-# Import at bottom to avoid circular import at module level
-from .telegram_bot import build_bot  # noqa: E402
+    if args.command == "loop":
+        cmd_loop(settings, args.todo)
+    elif args.command == "orchestrate":
+        _check_vllm(settings)
+        asyncio.run(cmd_orchestrate(settings, args.todo))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .settings import Settings
 
@@ -13,6 +13,12 @@ class AgentDeps:
 
     settings: Settings
     current_project: str = ""
+    todo_path: str = field(default="TODO.md")
+
+    def __post_init__(self) -> None:
+        """Ensure todo_path defaults to TODO.md when empty."""
+        if not self.todo_path:
+            object.__setattr__(self, "todo_path", "TODO.md")
 
 
 def load_settings() -> Settings:

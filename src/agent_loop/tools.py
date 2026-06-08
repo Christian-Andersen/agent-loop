@@ -10,6 +10,14 @@ from pydantic_ai import RunContext  # noqa: TC002
 
 from .config import AgentDeps  # noqa: TC001
 from .git_ops import checkout_branch, clone_repo, commit_all, status_summary
+from .todo import mark_done, read_todo, write_todo
+
+
+def _project_path(ctx: RunContext[AgentDeps]) -> Path:
+    """Resolve the working directory for the current project."""
+    if ctx.deps.current_project:
+        return Path(ctx.deps.settings.workspace_dir) / ctx.deps.current_project
+    return Path.cwd()
 
 
 async def call_opencode(ctx: RunContext[AgentDeps], prompt: str) -> str:
@@ -54,26 +62,50 @@ async def clone_repository(ctx: RunContext[AgentDeps], url: str, repo_name: str)
 
 async def create_branch(ctx: RunContext[AgentDeps], branch: str) -> str:
     """Create a new git branch in the current project."""
-    repo = ctx.deps.current_project
-    if not repo:
-        return "No project selected."
-    path = Path(ctx.deps.settings.workspace_dir) / repo
+    path = _project_path(ctx)
     return checkout_branch(str(path), branch)
 
 
 async def commit_changes(ctx: RunContext[AgentDeps], message: str) -> str:
     """Stage all changes and commit in the current project."""
-    repo = ctx.deps.current_project
-    if not repo:
-        return "No project is currently checked out."
-    path = Path(ctx.deps.settings.workspace_dir) / repo
+    path = _project_path(ctx)
     return commit_all(str(path), message)
 
 
 async def show_status(ctx: RunContext[AgentDeps]) -> str:
     """Show git status and recent log for the current project."""
-    repo = ctx.deps.current_project
-    if not repo:
-        return "No project is currently checked out."
-    path = Path(ctx.deps.settings.workspace_dir) / repo
+    path = _project_path(ctx)
     return status_summary(str(path))
+
+
+async def read_todo_file(ctx: RunContext[AgentDeps], path: str | None = None) -> str:
+    """Read the TODO.md file and return its contents.
+
+    If *path* is omitted the default ``TODO.md`` in the current
+    project directory is used.
+    """
+    todo_path = path or ctx.deps.todo_path
+    try:
+        return read_todo(str(_project_path(ctx) / todo_path))
+    except FileNotFoundError:
+        return f"File not found: {todo_path}"
+
+
+async def mark_todo_done(ctx: RunContext[AgentDeps], index: int, path: str | None = None) -> str:
+    """Mark the task at 0-based index as done in TODO.md.
+
+    If *path* is omitted the default ``TODO.md`` in the current
+    project directory is used.
+    """
+    todo_path = path or ctx.deps.todo_path
+    full = _project_path(ctx) / todo_path
+    try:
+        content = read_todo(str(full))
+    except FileNotFoundError:
+        return f"File not found: {todo_path}"
+
+    updated = mark_done(content, index)
+    if updated == content:
+        return f"Task {index} was already done or not found"
+    write_todo(str(full), updated)
+    return f"Task {index} marked as done"
